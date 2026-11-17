@@ -29,11 +29,11 @@ With `RUN_LIVE_STEPS=1`, the harness calls:
 
 - Step 1: `ax get workspaces`, to check `ax-server` is reachable.
 - Step 2: `ax apply -f workspace.yaml`.
-- Step 3: `ax apply -f gateway.yaml` and `ax apply -f task-starter.yaml`, then `ax resume`, `ax suspend` and `ax resume`.
+- Step 3: `ax apply -f gateway.yaml` and `ax apply -f task-starter.yaml`, then `ax resume`, wait for `/workspace/.ax/output`, `ax suspend` and `ax resume`, and a second task turn reusing `sessionId: hero-demo-session`.
 - Step 5: `ax promote task hero-demo-starter-task --to <remote> --replace --suspend-source`.
 
-The starter image is a placeholder until it is published (Substrate requires images pinned by digest), so Step 3 stops before `ax apply -f task-starter.yaml`, Step 5 has no task to promote, and both report `🟡 STUB`.
+The starter image is a placeholder until it is published (Substrate requires images pinned by digest); pass `STARTER_IMAGE=<image>@sha256:<digest>` to run Steps 3 and 5 before the digest is pinned in `task-starter.yaml`.
 
-Still stubbed: local mode and the AX Studio health check (Step 1), the warm snapshot check (Step 2), the second Session turn (Step 3), and the custom image task, which needs automatic `ax-task-runner` injection (Step 4).
+Still stubbed: local mode and the AX Studio health check (Step 1), the warm snapshot check (Step 2), and the custom image task, which needs automatic `ax-task-runner` injection (Step 4).
 
 The manifests use the `v1alpha1` schema on `main`. The starter task reaches the Gemini API through the Gateway in [`gateway.yaml`](./gateway.yaml), which names the Secret that holds the API key.
