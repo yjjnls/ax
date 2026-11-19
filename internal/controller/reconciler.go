@@ -595,10 +595,10 @@ func (r *TaskReconciler) delete(ctx context.Context, atespace, taskName string, 
 	if skipTemplates {
 		return nil
 	}
-	if err := r.deleteTaskTemplates(ctx, atespace, taskName); err != nil {
-		slog.Warn("could not clean up actor templates for task", "task", taskName, "error", err)
-	}
-	return nil
+	// A failed template cleanup must fail the delete: the server keeps the task
+	// record while the cleanup error is outstanding, so a later delete can
+	// finish the cleanup instead of leaving an orphan template behind.
+	return r.deleteTaskTemplates(ctx, atespace, taskName)
 }
 
 // deleteTaskTemplates removes all ActorTemplates belonging to the task. Templates

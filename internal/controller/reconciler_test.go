@@ -63,6 +63,10 @@ type mockControlServer struct {
 	createdEgressPolicies []*ateapipb.CreateActorEgressPolicyRequest
 	// egressPolicyCalls counts the egress policy calls of any kind.
 	egressPolicyCalls int
+	// listTemplateErr and deleteTemplateErr, when set, make template cleanup
+	// fail to stand in for a Substrate error.
+	listTemplateErr   error
+	deleteTemplateErr error
 }
 
 func (m *mockControlServer) GetActorEgressPolicy(_ context.Context, req *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
@@ -222,6 +226,9 @@ func (m *mockControlServer) GetActor(ctx context.Context, req *ateapipb.GetActor
 }
 
 func (m *mockControlServer) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
+	if m.listTemplateErr != nil {
+		return nil, m.listTemplateErr
+	}
 	resp := &ateapipb.ListActorTemplatesResponse{}
 	for name := range m.actorTemplates {
 		resp.ActorTemplates = append(resp.ActorTemplates, &ateapipb.ActorTemplate{
@@ -232,6 +239,9 @@ func (m *mockControlServer) ListActorTemplates(ctx context.Context, req *ateapip
 }
 
 func (m *mockControlServer) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
+	if m.deleteTemplateErr != nil {
+		return nil, m.deleteTemplateErr
+	}
 	name := req.GetActorTemplate().GetName()
 	delete(m.actorTemplates, name)
 	m.deletedTemplates = append(m.deletedTemplates, name)
@@ -1081,6 +1091,70 @@ func TestDelete_RemovesActorAndTemplates(t *testing.T) {
 		if !mockSrv.actorTemplates[keep] {
 			t.Errorf("template %s should not have been deleted", keep)
 		}
+	}
+}
+
+// A failed template cleanup must fail the delete instead of being dropped, so
+// the caller keeps the task record and a later delete can finish the cleanup
+// rather than leaving an orphan template behind (google/ax#444).
+func TestDelete_ReportsTemplateCleanupFailure(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name              string
+		listTemplateErr   error
+		deleteTemplateErr error
+		code              codes.Code
+	}{
+		{
+			name:              "template delete fails",
+			deleteTemplateErr: status.Error(codes.PermissionDenied, "template is in use"),
+			code:              codes.PermissionDenied,
+		},
+		{
+			name:            "template list fails",
+			listTemplateErr: status.Error(codes.Internal, "template store failed"),
+			code:            codes.Internal,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lis, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("failed to listen: %v", err)
+			}
+			defer lis.Close()
+
+			mockSrv := &mockControlServer{
+				actorTemplates:    map[string]bool{"job-tmpl-0a1b2c3d": true},
+				listTemplateErr:   tc.listTemplateErr,
+				deleteTemplateErr: tc.deleteTemplateErr,
+			}
+			grpcServer := grpc.NewServer()
+			ateapipb.RegisterControlServer(grpcServer, mockSrv)
+			go grpcServer.Serve(lis)
+			defer grpcServer.Stop()
+
+			client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatalf("failed to create substrate client: %v", err)
+			}
+			defer client.Close()
+
+			reconciler := controller.NewTaskReconciler(client, "test-template", v1alpha1.DefaultSystemNamespace, "")
+
+			if err := reconciler.Delete(ctx, "default", "job"); status.Code(err) != tc.code {
+				t.Fatalf("Delete error = %v, want code %v", err, tc.code)
+			}
+			// The actor was deleted, but the template must still exist: the
+			// failed cleanup has to remain visible to the next delete attempt.
+			if len(mockSrv.deletedActors) != 1 || mockSrv.deletedActors[0] != "job" {
+				t.Errorf("expected actor 'job' to be deleted, got %v", mockSrv.deletedActors)
+			}
+			if !mockSrv.actorTemplates["job-tmpl-0a1b2c3d"] {
+				t.Error("template job-tmpl-0a1b2c3d should still exist after the failed cleanup")
+			}
+		})
 	}
 }
 
