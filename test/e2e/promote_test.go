@@ -70,7 +70,7 @@ func TestE2E_Promote(t *testing.T) {
 	env.apply(t, ns, renderYAML(t, promoteManifest, map[string]string{
 		"Gateway": gw, "Workspace": ws, "Task": task, "Atespace": ns,
 	}))
-	env.mustRunAX(t, ns, "resume", "task", task)
+	env.mustResumeAX(t, ns, task)
 	promote := func(flags ...string) string {
 		t.Helper()
 		args := []string{"promote", "task", task, "--to", remote.KubeContext, "--to-namespace", remote.AXSystemNamespace}

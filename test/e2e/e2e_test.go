@@ -300,7 +300,7 @@ func TestE2E_TaskLifecycleAndSubstrateSync(t *testing.T) {
 	}
 
 	// 4. Resuming moves the task to Working on a worker reported by Substrate.
-	assertContains(t, "'ax resume task'", env.mustRunAX(t, ns, "resume", "task", name), "resumed")
+	assertContains(t, "'ax resume task'", env.mustResumeAX(t, ns, name), "resumed")
 	task = env.getTask(t, ns, name)
 	assertState(t, task, v1alpha1.TaskState_TASK_STATE_WORKING)
 	assertCondition(t, task, "WorkspaceReady", "True", v1alpha1.ReasonSetupComplete)
@@ -366,7 +366,7 @@ func TestE2E_MetadataServerAndGuestExec(t *testing.T) {
 	env.deleteOnCleanup(t, ns, "task", task)
 
 	env.apply(t, ns, renderYAML(t, metadataManifest, map[string]string{"Workspace": ws, "Task": task, "Atespace": ns}))
-	env.mustRunAX(t, ns, "resume", "task", task)
+	env.mustResumeAX(t, ns, task)
 
 	// 1. `ax ssh` sees spec.env, the metadata URL, and workspace files.
 	out := env.ssh(t, ns, task, "echo ENV=$CUSTOM_E2E_VAR META=$AX_METADATA_URL FILE=$(cat /workspace/hello.txt)")
@@ -411,7 +411,7 @@ func TestE2E_MetadataServerAndGuestExec(t *testing.T) {
 	noDebug := uniqueName("task-nodebug")
 	env.deleteOnCleanup(t, ns, "task", noDebug)
 	env.apply(t, ns, taskManifest(t, ns, noDebug, false))
-	env.mustRunAX(t, ns, "resume", "task", noDebug)
+	env.mustResumeAX(t, ns, noDebug)
 	out, err = env.runAX(ns, "ssh", noDebug, "--", "echo", "should-fail")
 	if err == nil {
 		t.Fatalf("expected 'ax ssh' to fail when debug=false, got:\n%s", out)
@@ -467,7 +467,7 @@ func TestE2E_WorkspaceSetup_FilesAndGit(t *testing.T) {
 	env.apply(t, ns, renderYAML(t, workspaceSetupManifest, map[string]string{
 		"GitWorkspace": wsGit, "Task": task, "Atespace": ns, "Repo": sampleRepo,
 	}))
-	env.mustRunAX(t, ns, "resume", "task", task)
+	env.mustResumeAX(t, ns, task)
 
 	// - The working directory is the workspace's mount path.
 	// - The workspace has the repo checked out at v1.0.0, the overlay file, and
@@ -525,7 +525,7 @@ func TestE2E_TaskSuspendAndResumePersistence(t *testing.T) {
 	env.deleteOnCleanup(t, ns, "task", task)
 
 	env.apply(t, ns, renderYAML(t, persistenceManifest, map[string]string{"Workspace": ws, "Task": task, "Atespace": ns}))
-	env.mustRunAX(t, ns, "resume", "task", task)
+	env.mustResumeAX(t, ns, task)
 
 	// 1. Write to the durable /workspace volume and to the ephemeral rootfs.
 	env.ssh(t, ns, task, "echo durable-data-42 > /workspace/durable.txt && echo ephemeral-tmp > /tmp/ephemeral.txt")
@@ -541,7 +541,7 @@ func TestE2E_TaskSuspendAndResumePersistence(t *testing.T) {
 	}
 
 	// 3. Resume: VOLUMES-fidelity snapshots restore /workspace but cold-boot the rootfs.
-	env.mustRunAX(t, ns, "resume", "task", task)
+	env.mustResumeAX(t, ns, task)
 	out := env.ssh(t, ns, task,
 		"echo DURABLE=$(cat /workspace/durable.txt); if [ -f /tmp/ephemeral.txt ]; then echo TMP_EXISTS; else echo TMP_GONE; fi")
 	assertContains(t, "post-resume check", out, "DURABLE=durable-data-42", "TMP_GONE")
@@ -570,7 +570,7 @@ func TestE2E_DescribeAndAtespaceIsolation(t *testing.T) {
 	assertContains(t, "'ax get tasks' in "+ns, env.mustRunAX(t, ns, "get", "tasks"), task)
 
 	// 2. Resume the task.
-	env.mustRunAX(t, ns, "resume", "task", task)
+	env.mustResumeAX(t, ns, task)
 
 	// 3. `ax describe task` reflects the running task and its conditions.
 	assertContains(t, "'ax describe task'", env.mustRunAX(t, ns, "describe", "task", task),
@@ -655,8 +655,8 @@ func TestE2E_GatewayEgress(t *testing.T) {
 		"Namespace": env.AXSystemNamespace, "Secret": secret, "UnlabeledSecret": unlabeled,
 	}))
 	env.apply(t, ns, taskManifest(t, ns, unbound, true))
-	env.mustRunAX(t, ns, "resume", "task", bound)
-	env.mustRunAX(t, ns, "resume", "task", unbound)
+	env.mustResumeAX(t, ns, bound)
+	env.mustResumeAX(t, ns, unbound)
 
 	echoHost := "ax-echo." + env.AXSystemNamespace + ".svc"
 	echoURL := "https://" + echoHost + "/"
@@ -730,7 +730,7 @@ func TestE2E_GatewayEgress(t *testing.T) {
 			env.mustRunAX(t, ns, "delete", "gateway", gw)
 		}
 		env.mustRunAX(t, ns, "suspend", "task", bound)
-		env.mustRunAX(t, ns, "resume", "task", bound)
+		env.mustResumeAX(t, ns, bound)
 		assertContains(t, "request received after the gateway was "+change, received(), "Bearer e2e-token")
 	}
 }

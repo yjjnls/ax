@@ -52,6 +52,15 @@ const (
 	axCommandTimeout = 2 * time.Minute
 	// readyTimeout bounds waiting for port-forwards and health endpoints.
 	readyTimeout = 15 * time.Second
+	// resumeCapacityTimeout bounds retrying `ax resume` while Substrate
+	// workers are still becoming schedulable. A worker pod becomes Ready as
+	// soon as it registers, but the scheduler keeps skipping it until atelet
+	// has downloaded the sandbox runtimes and the worker has reported them,
+	// so the first resume after cluster setup can fail with
+	// ResourceExhausted ("no worker has room for the actor").
+	resumeCapacityTimeout = 2 * time.Minute
+	// resumeCapacityRetryInterval is the delay between capacity retries.
+	resumeCapacityRetryInterval = 2 * time.Second
 )
 
 // suiteEnv holds the connections shared by every test in the suite. It is
@@ -391,6 +400,46 @@ func (s *suiteEnv) mustRunAX(t *testing.T, atespace string, args ...string) stri
 		t.Fatalf("ax %s failed: %v\nOutput:\n%s", strings.Join(args, " "), err, out)
 	}
 	return out
+}
+
+// mustResumeAX runs `ax resume` for task, retrying while Substrate reports
+// that no worker has room for the actor. The first resume after cluster setup
+// can race the workers' sandbox runtimes (see resumeCapacityTimeout);
+// Substrate queues the actor itself once capacity appears, so a bounded retry
+// is enough and no other resume error is retried.
+func (s *suiteEnv) mustResumeAX(t *testing.T, atespace, task string) string {
+	t.Helper()
+	deadline := time.Now().Add(resumeCapacityTimeout)
+	for {
+		out, err := s.runAX(atespace, "resume", "task", task)
+		if err == nil {
+			return out
+		}
+		if !isCapacityError(out) || time.Now().After(deadline) {
+			t.Fatalf("ax resume task %s failed: %v\nOutput:\n%s", task, err, out)
+		}
+		t.Logf("ax resume task %s: %s; retrying in %s", task, lastLine(out), resumeCapacityRetryInterval)
+		time.Sleep(resumeCapacityRetryInterval)
+	}
+}
+
+// isCapacityError reports whether CLI output carries Substrate's
+// "no worker has room for the actor" capacity rejection, which ax-server
+// surfaces with a ResourceExhausted code in its error chain.
+func isCapacityError(out string) bool {
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "resourceexhausted") || strings.Contains(lower, "no worker has room")
+}
+
+// lastLine returns the last non-empty line of out.
+func lastLine(out string) string {
+	var last string
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			last = line
+		}
+	}
+	return last
 }
 
 // ssh runs a shell script inside the task's sandbox via `ax ssh`.

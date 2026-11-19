@@ -91,3 +91,5 @@ jobs:
         kubectl get pods -A -o wide || true
         kubectl -n ax-system logs deployment/ax-server --tail=200 || true
         kubectl -n ate-system logs deployment/ate-api-server --all-containers --tail=200 || true
+        kubectl -n ate-system logs -l app=atelet --all-containers --tail=200 || true
+        kubectl -n ax-system logs deployment/ax-workers --all-containers --tail=200 || true

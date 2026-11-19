@@ -57,7 +57,7 @@ func TestE2E_PureImageLauncher(t *testing.T) {
 	env.apply(t, ns, renderYAML(t, launcherTaskManifest, map[string]string{
 		"Task": task, "Atespace": ns, "Image": image, "Goal": goal, "Session": session,
 	}))
-	env.mustRunAX(t, ns, "resume", "task", task)
+	env.mustResumeAX(t, ns, task)
 
 	// 1. The image is pure: the runner runs from the read-only runner volume.
 	out := env.ssh(t, ns, task, fmt.Sprintf(`test ! -e /usr/local/bin/ax-task-runner && echo NO_BAKED_RUNNER
@@ -74,7 +74,7 @@ touch %s/x 2>/dev/null || echo RUNNER_READ_ONLY`, v1alpha1.RunnerMountPath, v1al
 	// launcher does not run again for the same goal.
 	env.mustRunAX(t, ns, "suspend", "task", task)
 	assertState(t, env.getTask(t, ns, task), v1alpha1.TaskState_TASK_STATE_SUSPENDED)
-	env.mustRunAX(t, ns, "resume", "task", task)
+	env.mustResumeAX(t, ns, task)
 	waitForOutput(t, ns, task, wantOutput)
 	if runs := strings.TrimSpace(env.ssh(t, ns, task, "grep -c run /workspace/.ax/e2e-launcher-runs")); runs != "1" {
 		t.Fatalf("launcher ran %s times across a suspend and resume, want 1", runs)
