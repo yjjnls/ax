@@ -1162,6 +1162,71 @@ func TestServer_ReadsActorStateFromSubstrate(t *testing.T) {
 	assertNoActorState(t, stored)
 }
 
+// ListTasks fills in actor status with one point read per task instead of
+// listing every actor in each atespace (google/ax#520).
+func TestServer_ListTasksReadsActorPerTask(t *testing.T) {
+	st := memory.NewStore()
+	sub := substratetest.NewServer(t)
+	srv := server.NewServer(st, newTestReconciler(sub))
+	ctx := context.Background()
+
+	taskNames := []string{"paged-a", "paged-b", "paged-gone"}
+	for _, name := range taskNames {
+		if _, err := srv.CreateTask(ctx, &v1alpha1.CreateTaskRequest{Task: &v1alpha1.Task{
+			Metadata: &v1alpha1.ObjectMeta{Name: name},
+			Spec:     &v1alpha1.TaskSpec{Profile: &v1alpha1.Profile{Image: "alpine"}},
+		}}); err != nil {
+			t.Fatalf("CreateTask(%s): %v", name, err)
+		}
+	}
+	// Substrate runs the actors for the first two tasks; the third task's actor
+	// was removed outside AX.
+	for _, name := range taskNames[:2] {
+		sub.SetActor(&ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "default", Name: name},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		})
+	}
+	if err := sub.Client().DeleteActor(ctx, "default", "paged-gone"); err != nil {
+		t.Fatalf("DeleteActor(paged-gone): %v", err)
+	}
+	// Actors in the atespace that are not in the page must not be read.
+	for i := 0; i < 50; i++ {
+		name := fmt.Sprintf("other-%03d", i)
+		sub.SetActor(&ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "default", Name: name},
+			Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		})
+	}
+
+	listCallsBefore, getCallsBefore := sub.ListActorsCalls(), sub.GetActorCalls()
+	list, err := srv.ListTasks(ctx, &v1alpha1.ListTasksRequest{Atespace: "default"})
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(list.GetTasks()) != len(taskNames) {
+		t.Fatalf("ListTasks returned %d tasks, want %d", len(list.GetTasks()), len(taskNames))
+	}
+	if got := sub.ListActorsCalls() - listCallsBefore; got != 0 {
+		t.Errorf("ListTasks made %d ListActors calls, want none", got)
+	}
+	if got := sub.GetActorCalls() - getCallsBefore; got != len(taskNames) {
+		t.Errorf("ListTasks made %d GetActor calls for %d tasks, want one per task", got, len(taskNames))
+	}
+	states := make(map[string]v1alpha1.TaskState, len(taskNames))
+	for _, task := range list.GetTasks() {
+		states[task.GetMetadata().GetName()] = task.GetStatus().GetState()
+	}
+	for _, name := range taskNames[:2] {
+		if got := states[name]; got != v1alpha1.TaskState_TASK_STATE_WORKING {
+			t.Errorf("ListTasks state for %s = %v, want the actor's state", name, got)
+		}
+	}
+	if got := states["paged-gone"]; got != v1alpha1.TaskState_TASK_STATE_FAILED {
+		t.Errorf("ListTasks state for task without an actor = %v, want FAILED", got)
+	}
+}
+
 func TestServer_CreateTask_InitialStateSuspended(t *testing.T) {
 	st := memory.NewStore()
 	srv := server.NewServer(st, newTestReconciler(substratetest.NewServer(t)))

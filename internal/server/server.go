@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/google/ax/internal/apivalidation"
 	"github.com/google/ax/internal/controller"
@@ -535,28 +536,30 @@ func (s *Server) getTask(ctx context.Context, atespace, name string) (*v1alpha1.
 	return task, nil
 }
 
+// actorReadConcurrency bounds the concurrent actor reads that fill in the
+// status of a task page.
+const actorReadConcurrency = 8
+
 // listTasks returns a page of tasks with their Substrate-owned status filled
-// in, using one ListActors call per atespace.
+// in. It reads each task's actor directly, so filling in a page costs one
+// point read per task instead of a full listing of every actor in each
+// atespace (google/ax#520).
 func (s *Server) listTasks(ctx context.Context, atespace string, limit, offset int64) ([]*v1alpha1.Task, error) {
 	tasks, err := s.store.ListTasks(ctx, atespace, limit, offset)
 	if err != nil {
 		return tasks, err
 	}
-	byAtespace := make(map[string][]*v1alpha1.Task)
-	for _, t := range tasks {
-		ns := t.GetMetadata().GetAtespace()
-		byAtespace[ns] = append(byAtespace[ns], t)
+	sem := make(chan struct{}, actorReadConcurrency)
+	var wg sync.WaitGroup
+	for _, task := range tasks {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			actor, err := s.taskActor(ctx, task)
+			setActorStatus(task, actor, err)
+		})
 	}
-	for ns, group := range byAtespace {
-		actors, err := s.substrate.ListActors(ctx, ns)
-		byName := make(map[string]*ateapipb.Actor, len(actors))
-		for _, a := range actors {
-			byName[a.GetMetadata().GetName()] = a
-		}
-		for _, t := range group {
-			setActorStatus(t, byName[t.GetMetadata().GetName()], err)
-		}
-	}
+	wg.Wait()
 	return tasks, nil
 }
 
@@ -603,11 +606,18 @@ func (s *Server) deleteTask(ctx context.Context, task *v1alpha1.Task) error {
 
 // applyActor fills in the Substrate-owned status of task from its actor.
 func (s *Server) applyActor(ctx context.Context, task *v1alpha1.Task) {
+	actor, err := s.taskActor(ctx, task)
+	setActorStatus(task, actor, err)
+}
+
+// taskActor reads the task's actor from Substrate. A missing actor reads as
+// (nil, nil), because a task that finished provisioning normally has an actor.
+func (s *Server) taskActor(ctx context.Context, task *v1alpha1.Task) (*ateapipb.Actor, error) {
 	actor, err := s.substrate.GetActor(ctx, task.GetMetadata().GetAtespace(), task.GetMetadata().GetName())
 	if status.Code(err) == codes.NotFound {
-		actor, err = nil, nil
+		return nil, nil
 	}
-	setActorStatus(task, actor, err)
+	return actor, err
 }
 
 // setActorStatus overlays the actor's state on the task's status: actor name,

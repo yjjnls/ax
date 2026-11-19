@@ -65,6 +65,8 @@ type Server struct {
 	onDeleteActor    func()
 	deleteActorCalls int
 	deleteTagCalls   int
+	listActorsCalls  int
+	getActorCalls    int
 }
 
 // NewServer starts a Server with nothing in it. It stops when the test ends.
@@ -168,6 +170,20 @@ func (s *Server) DeleteActorCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.deleteActorCalls
+}
+
+// ListActorsCalls returns how many ListActors calls s has received.
+func (s *Server) ListActorsCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listActorsCalls
+}
+
+// GetActorCalls returns how many GetActor calls s has received.
+func (s *Server) GetActorCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getActorCalls
 }
 
 // SetTag stores a copy of tag, replacing any tag of the same name.
@@ -427,6 +443,7 @@ func (s *Server) CreateActorEgressPolicy(_ context.Context, req *ateapipb.Create
 func (s *Server) GetActor(_ context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.getActorCalls++
 	actor, err := s.lookupActor(req.GetActor())
 	if err != nil {
 		return nil, err
@@ -437,6 +454,7 @@ func (s *Server) GetActor(_ context.Context, req *ateapipb.GetActorRequest) (*at
 func (s *Server) ListActors(_ context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.listActorsCalls++
 	resp := &ateapipb.ListActorsResponse{}
 	for _, actor := range s.actors {
 		if req.GetAtespace() == "" || actor.GetMetadata().GetAtespace() == req.GetAtespace() {
